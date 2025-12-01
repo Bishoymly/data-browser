@@ -34,7 +34,9 @@ Return your analysis as JSON with this structure:
 {
   "friendlyNames": {
     "tableName": "Friendly Table Name",
-    "tableName.columnName": "Friendly Column Name"
+    "schema.tableName": "Friendly Table Name (if schema exists)",
+    "tableName.columnName": "Friendly Column Name",
+    "schema.tableName.columnName": "Friendly Column Name (if schema exists)"
   },
   "columnConfigs": {
     "tableName.columnName": {

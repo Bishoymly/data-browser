@@ -10,6 +10,8 @@ import { Button } from '@/components/ui/button';
 import { Menu } from 'lucide-react';
 import { useUIStore } from '@/stores/ui-store';
 import { ConfigExport } from '@/components/config/ConfigExport';
+import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 
 export default function DashboardLayout({
   children,
@@ -19,7 +21,7 @@ export default function DashboardLayout({
   const { connections, activeConnectionId, loadFromStorage, getActiveConnection } =
     useConnectionStore();
   const { setMetadata, setAIAnalysis } = useSchemaStore();
-  const { sidebarOpen, setSidebarOpen } = useUIStore();
+  const { sidebarOpen, setSidebarOpen, showFriendlyNames, setShowFriendlyNames } = useUIStore();
   const router = useRouter();
 
   useEffect(() => {
@@ -70,7 +72,17 @@ export default function DashboardLayout({
       <Sidebar />
       <main className={`flex-1 overflow-auto transition-all ${sidebarOpen ? 'md:ml-64' : ''}`}>
         <div className="p-6">
-          <div className="mb-4 flex justify-end">
+          <div className="mb-4 flex justify-between items-center">
+            <div className="flex items-center space-x-2">
+              <Switch
+                id="friendly-names"
+                checked={showFriendlyNames}
+                onCheckedChange={setShowFriendlyNames}
+              />
+              <Label htmlFor="friendly-names" className="cursor-pointer">
+                Show Friendly Names
+              </Label>
+            </div>
             <ConfigExport />
           </div>
           {children}

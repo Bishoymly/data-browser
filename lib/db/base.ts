@@ -14,7 +14,7 @@ export interface PaginationParams {
 
 export interface FilterParams {
   column: string;
-  operator: 'equals' | 'contains' | 'startsWith' | 'endsWith' | 'greaterThan' | 'lessThan' | 'between';
+  operator: 'equals' | 'contains' | 'startsWith' | 'endsWith' | 'greaterThan' | 'lessThan' | 'between' | 'in';
   value: any;
 }
 

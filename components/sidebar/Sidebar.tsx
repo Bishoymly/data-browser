@@ -60,9 +60,25 @@ export function Sidebar() {
 
   const getTableDisplayName = (table: Table): string => {
     const key = table.schema ? `${table.schema}.${table.name}` : table.name;
-    if (showFriendlyNames && aiAnalysis?.friendlyNames[key]) {
-      return aiAnalysis.friendlyNames[key];
+    
+    if (showFriendlyNames && aiAnalysis?.friendlyNames) {
+      // Try multiple key formats
+      let friendlyName = aiAnalysis.friendlyNames[key];
+      // Try without schema
+      if (!friendlyName && table.schema) {
+        friendlyName = aiAnalysis.friendlyNames[table.name];
+      }
+      // Try just the name part
+      if (!friendlyName) {
+        const nameParts = table.name.split('.');
+        friendlyName = aiAnalysis.friendlyNames[nameParts[nameParts.length - 1]];
+      }
+      
+      if (friendlyName) {
+        return friendlyName;
+      }
     }
+    
     return table.schema ? `${table.schema}.${table.name}` : table.name;
   };
 

@@ -263,6 +263,16 @@ export class SQLServerAdapter extends DatabaseAdapter {
             clause = `[${filter.column}] < @${paramName}`;
             params[paramName] = filter.value;
             break;
+          case 'in':
+            // Handle array of values
+            if (Array.isArray(filter.value) && filter.value.length > 0) {
+              const placeholders = filter.value.map((_, i) => `@${paramName}_${i}`).join(', ');
+              clause = `[${filter.column}] IN (${placeholders})`;
+              filter.value.forEach((val, i) => {
+                params[`${paramName}_${i}`] = val;
+              });
+            }
+            break;
         }
         
         if (clause) {

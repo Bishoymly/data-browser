@@ -9,12 +9,14 @@ import { Sidebar } from '@/components/sidebar/Sidebar';
 import { useUIStore } from '@/stores/ui-store';
 import { ConfigExport } from '@/components/config/ConfigExport';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 
 export default function DashboardPage() {
   const router = useRouter();
   const { connections, loadFromStorage, activeConnectionId, getActiveConnection } = useConnectionStore();
   const { metadata, setMetadata, setAIAnalysis } = useSchemaStore();
-  const { sidebarOpen } = useUIStore();
+  const { sidebarOpen, showFriendlyNames, setShowFriendlyNames } = useUIStore();
 
   useEffect(() => {
     loadFromStorage();
@@ -35,7 +37,14 @@ export default function DashboardPage() {
       }
       // Load AI analysis
       if (connection.aiAnalysis) {
+        console.log('Loading AI analysis from connection:', {
+          hasFriendlyNames: !!connection.aiAnalysis.friendlyNames,
+          friendlyNamesCount: Object.keys(connection.aiAnalysis.friendlyNames || {}).length,
+          sampleKeys: Object.keys(connection.aiAnalysis.friendlyNames || {}).slice(0, 5),
+        });
         setAIAnalysis(connection.aiAnalysis);
+      } else {
+        console.log('No AI analysis found in connection config');
       }
     }
   }, [connections.length, activeConnectionId, getActiveConnection, router, setMetadata, setAIAnalysis]);
@@ -76,7 +85,17 @@ export default function DashboardPage() {
       <Sidebar />
       <main className={`flex-1 overflow-auto transition-all ${sidebarOpen ? 'md:ml-64' : ''}`}>
         <div className="p-6">
-          <div className="mb-4 flex justify-end">
+          <div className="mb-4 flex justify-between items-center">
+            <div className="flex items-center space-x-2">
+              <Switch
+                id="friendly-names"
+                checked={showFriendlyNames}
+                onCheckedChange={setShowFriendlyNames}
+              />
+              <Label htmlFor="friendly-names" className="cursor-pointer">
+                Show Friendly Names
+              </Label>
+            </div>
             <ConfigExport />
           </div>
           <div className="space-y-6">
