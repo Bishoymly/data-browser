@@ -9,14 +9,16 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { ConfigExporter } from '@/lib/config/export';
 import { useConnectionStore } from '@/stores/connection-store';
-import { Download, Upload, Server, Database } from 'lucide-react';
+import { Download, Upload, Server, Database, Settings } from 'lucide-react';
 import { useState } from 'react';
 import { ConfigImporter } from '@/lib/config/import';
+import { useRouter } from 'next/navigation';
 
 export function ConfigExport() {
   const { connections, activeConnectionId, setConnections, setActiveConnection } =
     useConnectionStore();
   const [loading, setLoading] = useState(false);
+  const router = useRouter();
 
   const handleExport = () => {
     const config = {
@@ -114,14 +116,22 @@ export function ConfigExport() {
     }
   };
 
+  const handleManageConfig = () => {
+    router.push('/config');
+  };
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="outline" size="sm" disabled={loading}>
-          {loading ? 'Loading...' : 'Config'}
+          <Settings className="h-4 w-4" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
+        <DropdownMenuItem onClick={handleManageConfig}>
+          <Settings className="mr-2 h-4 w-4" />
+          Manage Config
+        </DropdownMenuItem>
         <DropdownMenuItem onClick={handleExport}>
           <Download className="mr-2 h-4 w-4" />
           Download Config

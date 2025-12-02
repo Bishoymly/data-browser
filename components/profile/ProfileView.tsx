@@ -1,13 +1,14 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import type React from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { RelationCard } from './RelationCard';
 import { useConnectionStore } from '@/stores/connection-store';
 import { useSchemaStore } from '@/stores/schema-store';
 import { useUIStore } from '@/stores/ui-store';
-import { ProfileLayout } from '@/types/schema';
+import { useProfileModalStore } from '@/stores/profile-modal-store';
+import { ProfileLayout, Column } from '@/types/schema';
 import { DatabaseType } from '@/types/database';
 
 interface ProfileViewProps {
@@ -20,10 +21,12 @@ export function ProfileView({ tableName, schema, recordId }: ProfileViewProps) {
   const { getActiveConnection } = useConnectionStore();
   const { metadata, aiAnalysis } = useSchemaStore();
   const { showFriendlyNames } = useUIStore();
+  const { openModal } = useProfileModalStore();
 
   const [recordData, setRecordData] = useState<any>(null);
   const [relatedData, setRelatedData] = useState<Record<string, any[]>>({});
   const [loading, setLoading] = useState(true);
+  const [lookupMaps, setLookupMaps] = useState<Record<string, Map<any, string>>>({});
 
   const connection = getActiveConnection();
   if (!connection || !metadata) {
@@ -66,6 +69,123 @@ export function ProfileView({ tableName, schema, recordId }: ProfileViewProps) {
     return false;
   };
 
+  // Fetch lookup values for columns that have lookup configurations
+  const fetchLookupValues = useCallback(async (record: any, cols: Column[]) => {
+    if (!connection || !aiAnalysis || !metadata || !record) return;
+
+    const lookupMapsToFetch: Record<string, {
+      lookupTable: string;
+      lookupSchema?: string;
+      lookupColumn: string;
+      lookupDisplayColumn: string;
+      columnName: string;
+    }> = {};
+
+    // Identify columns with lookup configurations
+    cols.forEach((col) => {
+      const columnKey = schema ? `${schema}.${tableName}.${col.name}` : `${tableName}.${col.name}`;
+      const config = aiAnalysis.columnConfigs[columnKey] || 
+                     aiAnalysis.columnConfigs[`${tableName}.${col.name}`] ||
+                     aiAnalysis.columnConfigs[col.name];
+      
+      if (config?.lookupTable && config.lookupColumn && config.lookupDisplayColumn) {
+        // Parse lookup table name (might include schema)
+        const lookupTableParts = config.lookupTable.split('.');
+        let lookupTableName = lookupTableParts.length > 1 
+          ? lookupTableParts.slice(1).join('.')
+          : lookupTableParts[0];
+        let lookupTableSchema = lookupTableParts.length > 1 ? lookupTableParts[0] : undefined;
+
+        // 1. Try to find schema from foreign key relationships
+        const fk = col.foreignKey;
+        if (fk && fk.referencedTable === lookupTableName) {
+          lookupTableSchema = fk.referencedSchema;
+        }
+
+        // 2. If no schema provided, try to find it in metadata
+        if (!lookupTableSchema && metadata) {
+          const foundTable = metadata.tables.find(t => 
+            t.name === lookupTableName || 
+            t.name.toLowerCase() === lookupTableName.toLowerCase()
+          );
+          if (foundTable && foundTable.schema) {
+            lookupTableSchema = foundTable.schema;
+          }
+        }
+
+        // 3. Try current table's schema (many lookup tables are in the same schema)
+        if (!lookupTableSchema && schema) {
+          const foundTable = metadata?.tables.find(t => 
+            t.name === lookupTableName && t.schema === schema
+          );
+          if (foundTable) {
+            lookupTableSchema = schema;
+          }
+        }
+
+        lookupMapsToFetch[col.name] = {
+          lookupTable: lookupTableName,
+          lookupSchema: lookupTableSchema,
+          lookupColumn: config.lookupColumn,
+          lookupDisplayColumn: config.lookupDisplayColumn,
+          columnName: col.name,
+        };
+      }
+    });
+
+    if (Object.keys(lookupMapsToFetch).length === 0) return;
+
+    // Fetch lookup values for each lookup column
+    const newLookupMaps: Record<string, Map<any, string>> = {};
+    
+    for (const [columnName, lookupConfig] of Object.entries(lookupMapsToFetch)) {
+      try {
+        // Get the ID value from the record
+        const id = record[columnName];
+        if (id === null || id === undefined) continue;
+
+        // Fetch lookup value
+        const lookupResponse = await fetch('/api/query', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: connection.type,
+            config: connection.config,
+            table: lookupConfig.lookupTable,
+            schema: lookupConfig.lookupSchema,
+            options: {
+              filters: [{
+                column: lookupConfig.lookupColumn,
+                operator: 'equals',
+                value: id,
+              }],
+            },
+          }),
+        });
+
+        if (lookupResponse.ok) {
+          const lookupResult = await lookupResponse.json();
+          const lookupMap = new Map<any, string>();
+          
+          // Build map of ID -> display value
+          lookupResult.rows?.forEach((row: any) => {
+            const rowId = row[lookupConfig.lookupColumn];
+            const displayValue = row[lookupConfig.lookupDisplayColumn];
+            if (rowId !== null && rowId !== undefined && displayValue !== null && displayValue !== undefined) {
+              lookupMap.set(rowId, String(displayValue));
+            }
+          });
+
+          newLookupMaps[columnName] = lookupMap;
+        }
+      } catch (error) {
+        console.error(`Error fetching lookup values for ${columnName}:`, error);
+      }
+    }
+
+    setLookupMaps(newLookupMaps);
+  }, [connection, aiAnalysis, metadata, schema, tableName]);
+
   // Fetch main record
   useEffect(() => {
     const fetchMainRecord = async () => {
@@ -97,7 +217,13 @@ export function ProfileView({ tableName, schema, recordId }: ProfileViewProps) {
         if (response.ok) {
           const result = await response.json();
           if (result.rows.length > 0) {
-            setRecordData(result.rows[0]);
+            const fetchedRecord = result.rows[0];
+            setRecordData(fetchedRecord);
+            
+            // Fetch lookup values after record is loaded
+            if (table && table.columns) {
+              fetchLookupValues(fetchedRecord, table.columns);
+            }
           }
         }
       } catch (error) {
@@ -108,7 +234,7 @@ export function ProfileView({ tableName, schema, recordId }: ProfileViewProps) {
     };
 
     fetchMainRecord();
-  }, [connection, tableName, schema, recordId, table]);
+  }, [connection, tableName, schema, recordId, table, fetchLookupValues]);
 
   // Fetch related data after main record is loaded
   useEffect(() => {
@@ -295,6 +421,21 @@ export function ProfileView({ tableName, schema, recordId }: ProfileViewProps) {
     return <div className="p-4">Record not found</div>;
   }
 
+  const getTableDisplayName = (): string => {
+    const tableKey = schema ? `${schema}.${tableName}` : tableName;
+    if (showFriendlyNames && aiAnalysis?.friendlyNames) {
+      // Try multiple key formats
+      let friendlyName = aiAnalysis.friendlyNames[tableKey];
+      if (!friendlyName && schema) {
+        friendlyName = aiAnalysis.friendlyNames[tableName];
+      }
+      if (friendlyName) {
+        return friendlyName;
+      }
+    }
+    return schema ? `${schema}.${tableName}` : tableName;
+  };
+
   const getColumnDisplayName = (columnName: string): string => {
     if (showFriendlyNames && aiAnalysis?.friendlyNames) {
       // Try multiple key formats
@@ -319,6 +460,7 @@ export function ProfileView({ tableName, schema, recordId }: ProfileViewProps) {
     return columnName;
   };
 
+
   const formatValue = (value: any, columnName: string): React.ReactNode => {
     if (value === null || value === undefined) {
       return <span className="text-muted-foreground">null</span>;
@@ -327,7 +469,85 @@ export function ProfileView({ tableName, schema, recordId }: ProfileViewProps) {
     const columnKey = schema
       ? `${schema}.${tableName}.${columnName}`
       : `${tableName}.${columnName}`;
-    const config = aiAnalysis?.columnConfigs[columnKey];
+    
+    // Try multiple key formats for column configs
+    let config = aiAnalysis?.columnConfigs[columnKey];
+    if (!config && aiAnalysis?.columnConfigs) {
+      config = aiAnalysis.columnConfigs[`${tableName}.${columnName}`] || 
+               aiAnalysis.columnConfigs[columnName] || 
+               undefined;
+    }
+    
+    // Handle lookup values if configured
+    if (config?.lookupTable && value !== null && value !== undefined) {
+      const lookupMap = lookupMaps[columnName];
+      
+      // Get lookup table schema (same logic as in fetchLookupValues)
+      const lookupTableParts = config.lookupTable.split('.');
+      let lookupTableName = lookupTableParts.length > 1 
+        ? lookupTableParts.slice(1).join('.')
+        : lookupTableParts[0];
+      let lookupTableSchema = lookupTableParts.length > 1 ? lookupTableParts[0] : undefined;
+      
+      // Try to find schema from foreign key relationships
+      const col = table?.columns.find(c => c.name === columnName);
+      const fk = col?.foreignKey;
+      if (fk && fk.referencedTable === lookupTableName) {
+        lookupTableSchema = fk.referencedSchema;
+      }
+      
+      // If no schema provided, try to find it in metadata
+      if (!lookupTableSchema && metadata) {
+        const foundTable = metadata.tables.find(t => 
+          t.name === lookupTableName || 
+          t.name.toLowerCase() === lookupTableName.toLowerCase()
+        );
+        if (foundTable && foundTable.schema) {
+          lookupTableSchema = foundTable.schema;
+        }
+      }
+      
+      // Try current table's schema
+      if (!lookupTableSchema && schema) {
+        const foundTable = metadata?.tables.find(t => 
+          t.name === lookupTableName && t.schema === schema
+        );
+        if (foundTable) {
+          lookupTableSchema = schema;
+        }
+      }
+      
+      const lookupTableKey = lookupTableSchema 
+        ? `${lookupTableSchema}.${lookupTableName}` 
+        : lookupTableName;
+      const lookupProfileUrl = `/profile/${encodeURIComponent(lookupTableKey)}/${encodeURIComponent(String(value))}`;
+      
+      if (lookupMap && lookupMap.has(value)) {
+        const displayValue = lookupMap.get(value);
+        return (
+          <button
+            type="button"
+            onClick={() => openModal(lookupTableName, String(value), lookupTableSchema)}
+            className="text-primary bg-primary/5 hover:bg-primary/15 px-2 py-1 rounded transition-colors cursor-pointer inline-block"
+            title={`${columnName}: ${value} - Click to view profile`}
+          >
+            {displayValue}
+          </button>
+        );
+      }
+      // Fallback: show ID if lookup not loaded yet, but still make it a link
+      return (
+        <button
+          type="button"
+          onClick={() => openModal(lookupTableName, String(value), lookupTableSchema)}
+          className="text-primary bg-primary/5 hover:bg-primary/15 px-2 py-1 rounded transition-colors cursor-pointer inline-block text-muted-foreground"
+          title={`Lookup: ${config.lookupTable} (ID: ${value}) - Click to view profile`}
+        >
+          {String(value)}
+        </button>
+      );
+    }
+    
     const format = config?.displayFormat;
 
     switch (format) {
@@ -383,14 +603,49 @@ export function ProfileView({ tableName, schema, recordId }: ProfileViewProps) {
 
   return (
     <div className="space-y-6 p-6">
+      {/* Show AI-generated cards first if available */}
+      {profileLayout && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {profileLayout.cards.map((card, index) => {
+            // Determine related table name and schema for navigation
+            let relatedTableName = card.table || card.title;
+            let relatedSchema: string | undefined = undefined;
+            
+            if (card.relationship) {
+              const rel = card.relationship;
+              const isFromTable = rel.fromTable === tableName && rel.fromSchema === schema;
+              relatedTableName = isFromTable ? rel.toTable : rel.fromTable;
+              relatedSchema = isFromTable ? rel.toSchema : rel.fromSchema;
+            }
+
+            // Filter cards based on schema configuration
+            if (card.type === 'related-table' || card.type === 'aggregate') {
+              if (!isTableAllowed(relatedTableName, relatedSchema)) {
+                return null; // Skip card if table is not allowed
+              }
+            }
+
+            return (
+              <RelationCard
+                key={index}
+                card={card}
+                recordData={recordData}
+                relatedData={relatedData[card.title] || []}
+                connection={connection}
+                tableName={card.type === 'fields' ? tableName : relatedTableName}
+                schema={card.type === 'fields' ? schema : relatedSchema}
+                lookupMaps={card.type === 'fields' ? lookupMaps : undefined}
+              />
+            );
+          })}
+        </div>
+      )}
+
+      {/* Show all fields card */}
       <Card>
         <CardHeader>
           <CardTitle>
-            {showFriendlyNames && aiAnalysis?.friendlyNames[schema ? `${schema}.${tableName}` : tableName]
-              ? aiAnalysis.friendlyNames[schema ? `${schema}.${tableName}` : tableName]
-              : schema
-                ? `${schema}.${tableName}`
-                : tableName}
+            {getTableDisplayName()}
           </CardTitle>
           <CardDescription>Record Details</CardDescription>
         </CardHeader>
@@ -413,60 +668,38 @@ export function ProfileView({ tableName, schema, recordId }: ProfileViewProps) {
         </CardContent>
       </Card>
 
-      {(profileLayout || Object.keys(relatedData).length > 0) && (
+      {/* Show fallback related tables if no AI layout */}
+      {!profileLayout && Object.keys(relatedData).length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {profileLayout ? (
-            // Use AI-generated profile layout
-            profileLayout.cards.map((card, index) => {
-              // Determine related table name and schema for navigation
-              let relatedTableName = card.table || card.title;
-              let relatedSchema: string | undefined = undefined;
-              
-              if (card.relationship) {
-                const rel = card.relationship;
-                const isFromTable = rel.fromTable === tableName && rel.fromSchema === schema;
-                relatedTableName = isFromTable ? rel.toTable : rel.fromTable;
-                relatedSchema = isFromTable ? rel.toSchema : rel.fromSchema;
-              }
-
-              return (
-                <RelationCard
-                  key={index}
-                  card={card}
-                  recordData={recordData}
-                  relatedData={relatedData[card.title] || []}
-                  connection={connection}
-                  tableName={relatedTableName}
-                  schema={relatedSchema}
-                />
-              );
-            })
-          ) : (
-            // Fallback: Show all related tables based on detected relationships
-            Object.entries(relatedData).map(([relatedTableKey, rows]) => {
-              const parts = relatedTableKey.split('.');
-              const relatedSchema = parts.length > 1 ? parts[0] : undefined;
-              const relatedTable = parts.length > 1 ? parts.slice(1).join('.') : parts[0];
-              
-              return (
-                <RelationCard
-                  key={relatedTableKey}
-                  card={{
-                    type: 'related-table',
-                    title: relatedSchema 
-                      ? `${relatedSchema}.${relatedTable}` 
-                      : relatedTable,
-                    columns: undefined,
-                  }}
-                  recordData={recordData}
-                  relatedData={rows}
-                  connection={connection}
-                  tableName={relatedTable}
-                  schema={relatedSchema}
-                />
-              );
-            })
-          )}
+          {Object.entries(relatedData).map(([relatedTableKey, rows]) => {
+            const parts = relatedTableKey.split('.');
+            const relatedSchema = parts.length > 1 ? parts[0] : undefined;
+            const relatedTable = parts.length > 1 ? parts.slice(1).join('.') : parts[0];
+            
+            // Filter tables based on schema configuration
+            if (!isTableAllowed(relatedTable, relatedSchema)) {
+              return null;
+            }
+            
+            return (
+              <RelationCard
+                key={relatedTableKey}
+                card={{
+                  type: 'related-table',
+                  title: relatedSchema 
+                    ? `${relatedSchema}.${relatedTable}` 
+                    : relatedTable,
+                  columns: undefined,
+                }}
+                recordData={recordData}
+                relatedData={rows}
+                connection={connection}
+                tableName={relatedTable}
+                schema={relatedSchema}
+                lookupMaps={undefined}
+              />
+            );
+          })}
         </div>
       )}
     </div>
